@@ -1,0 +1,1150 @@
+<!DOCTYPE html>
+<!-- 
+========================================================================================
+Project: Viscosity and Viscous Force Simulation
+Description: เว็บแอปพลิเคชันเชิงโต้ตอบ (Interactive Web) สำหรับการศึกษาเรื่องความหนืดและแรงหนืด 
+             ประกอบด้วยทฤษฎีกฎของสโตกส์ (Stokes' Law), การพิสูจน์สมการความเร็วปลาย (Terminal Velocity), 
+             แบบจำลองฟิสิกส์ 2 มิติที่คำนวณแบบ Real-time, กราฟความเร็ว, และโจทย์คำนวณแบบโต้ตอบ
+Features: 
+  - ระบบ 2 ภาษา (English / Thai) ทำงานผ่าน CSS Class Toggle
+  - เรนเดอร์สมการคณิตศาสตร์ด้วย MathJax
+  - วาดกราฟความเร็ว-เวลา ด้วย Chart.js พร้อมระบบล็อกสเกลและ Pre-calculation
+  - Physics Engine เขียนด้วย JavaScript ล้วน (Fixed Timestep Integration)
+========================================================================================
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Viscosity and Viscous Force</title>
+    
+    <!-- เรียกใช้ Tailwind CSS ผ่าน CDN สำหรับจัดหน้า UI -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- เรียกใช้ Google Fonts (Inter สำหรับภาษาอังกฤษ, Kanit สำหรับภาษาไทย) -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Kanit:wght@300;400;500;600&display=swap" rel="stylesheet">
+    
+    <!-- เรียกใช้ Chart.js สำหรับวาดกราฟ -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- การตั้งค่า MathJax สำหรับเรนเดอร์สมการคณิตศาสตร์ (LaTeX) ให้สวยงาม -->
+    <script>
+        window.MathJax = {
+            tex: {
+                inlineMath: [['\\(', '\\)']], // ใช้ \( ... \) สำหรับสมการแทรกในบรรทัด
+                displayMath: [['$$', '$$']]   // ใช้ $$ ... $$ สำหรับสมการแยกบรรทัด
+            },
+            startup: {
+                pageReady: () => {
+                    return MathJax.startup.defaultPageReady();
+                }
+            }
+        };
+    </script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+
+    <!-- สไตล์ CSS ที่เขียนเพิ่มเติมนอกเหนือจาก Tailwind -->
+    <style>
+        body {
+            font-family: 'Inter', 'Kanit', sans-serif;
+            background-color: #f8fafc;
+            color: #334155;
+        }
+        
+        /* =========================================
+           ระบบปุ่มสลับภาษา (Language Toggle Switch)
+           ========================================= */
+        .lang-toggle-container {
+            position: relative;
+            width: 110px;
+            height: 44px;
+            background-color: #f1f5f9;
+            border-radius: 12px;
+            border: 1px solid #e2e8f0;
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            box-shadow: inset 0 1px 3px rgba(0,0,0,0.05);
+            padding: 4px;
+        }
+
+        /* กล่องสีขาวที่สไลด์ไปมา */
+        .lang-toggle-slider {
+            position: absolute;
+            width: 48px;
+            height: 34px;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            transition: transform 0.3s cubic-bezier(0.4, 0.0, 0.2, 1);
+            z-index: 1;
+        }
+
+        /* เมื่อ state เป็นภาษาไทย ให้สไลด์ไปด้านขวา */
+        .lang-toggle-container[data-lang="th"] .lang-toggle-slider {
+            transform: translateX(52px);
+        }
+
+        /* สไตล์ตัวอักษร EN / TH ในปุ่ม */
+        .lang-text {
+            flex: 1;
+            text-align: center;
+            font-weight: 600;
+            font-size: 16px;
+            z-index: 2;
+            transition: color 0.3s ease;
+            user-select: none;
+        }
+
+        .text-en { color: #64748b; }
+        .text-th { color: #f97316; }
+
+        .lang-toggle-container[data-lang="en"] .text-en { color: #475569; }
+        .lang-toggle-container[data-lang="th"] .text-th { color: #f97316; }
+
+        /* =========================================
+           ระบบซ่อน/แสดงข้อความตามภาษา (Bilingual Display)
+           ควบคุมผ่านคลาส 'lang-th' หรือ 'lang-en' ที่แท็ก <body>
+           ========================================= */
+        .show-th { display: none; } /* ซ่อนภาษาไทยเป็นค่าเริ่มต้น (เพราะแสดง ENG) */
+        body.lang-th .show-en { display: none; } /* ถ้า body เป็น th ให้ซ่อน ENG */
+        body.lang-th .show-th { display: inline-block; } /* ถ้า body เป็น th ให้แสดง TH */
+        
+        body.lang-th .show-th-block { display: block; }
+        body.lang-th .show-en-block { display: none; }
+        .show-th-block { display: none; }
+
+        /* พื้นหลังกรอบ Canvas สำหรับแบบจำลอง */
+        canvas#simCanvas {
+            border-radius: 0.5rem;
+            background: linear-gradient(to bottom, #f0f9ff, #e0f2fe);
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 350px;
+            height: 600px;
+        }
+
+        /* กล่อง Input กรอกตัวเลขในโจทย์คำนวณ */
+        .input-box {
+            width: 80px;
+            padding: 4px 8px;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            text-align: right;
+            font-family: monospace;
+            font-size: 1rem;
+        }
+        
+        /* สไตล์สำหรับฟอร์มควบคุม (Controls) */
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+        
+        .control-label {
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: #475569;
+        }
+    </style>
+</head>
+
+<!-- ตั้งค่าภาษาเริ่มต้นเป็นภาษาอังกฤษ (lang-en) และเรียกฟังก์ชัน initSim() เมื่อโหลดหน้าเว็บเสร็จ -->
+<body class="lang-en" onload="initSim()">
+
+    <!-- Header Navigation -->
+    <header class="bg-white shadow-sm sticky top-0 z-50">
+        <div class="max-w-6xl mx-auto px-4 py-4 flex justify-between items-center">
+            <h1 class="text-2xl font-bold text-blue-700">
+                <span class="show-en">Fluid Mechanics</span>
+                <span class="show-th">กลศาสตร์ของไหล</span>
+            </h1>
+            
+            <!-- ปุ่มสลับภาษา -->
+            <div class="lang-toggle-container" id="langToggle" data-lang="en" onclick="toggleLanguage()">
+                <div class="lang-toggle-slider"></div>
+                <div class="lang-text text-en">EN</div>
+                <div class="lang-text text-th">TH</div>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-6xl mx-auto px-4 py-8 space-y-12">
+
+        <!-- ================= SECTION 1: ทฤษฎีและแนวคิด (Theory) ================= -->
+        <section class="bg-white p-8 rounded-2xl shadow-md border border-slate-100">
+            <h2 class="text-3xl font-bold mb-4 text-slate-800">
+                <span class="show-en">Viscosity and Viscous Force</span>
+                <span class="show-th">ความหนืดและแรงหนืด</span>
+            </h2>
+            
+            <div class="grid md:grid-cols-2 gap-8">
+                <!-- ส่วนอธิบายกฎของสโตกส์ -->
+                <div>
+                    <h3 class="text-xl font-semibold mb-2 text-blue-600">
+                        <span class="show-en">Concept & Stokes' Law</span>
+                        <span class="show-th">แนวคิดหลักและกฎของสโตกส์</span>
+                    </h3>
+                    <p class="mb-4 leading-relaxed">
+                        <span class="show-en"><strong>Viscosity</strong> is a measure of a fluid's resistance to flow (internal friction). When an object moves through a viscous fluid, it experiences a resisting force called <strong>Viscous Force</strong>.</span>
+                        <span class="show-th"><strong>ความหนืด (Viscosity)</strong> คือสมบัติที่ต้านทานการไหลของของไหล (ความเสียดทานภายใน) เมื่อวัตถุเคลื่อนที่ผ่านของไหล จะเกิดแรงต้านการเคลื่อนที่เรียกว่า <strong>แรงหนืด (Viscous Force)</strong></span>
+                    </p>
+                    <p class="mb-4 leading-relaxed">
+                        <span class="show-en">In 1851, George Gabriel Stokes derived an equation for the viscous drag force on a small sphere moving at low speeds through a fluid. This is known as <strong>Stokes' Law</strong>:</span>
+                        <span class="show-th">ในปี ค.ศ. 1851 จอร์จ กาเบรียล สโตกส์ ได้พิสูจน์สมการเพื่อหาแรงหนืดที่กระทำต่อวัตถุทรงกลมขนาดเล็กที่เคลื่อนที่ด้วยความเร็วต่ำในของไหล เรียกว่า <strong>กฎของสโตกส์ (Stokes' Law)</strong>:</span>
+                    </p>
+                    <!-- แสดงสูตรแรงหนืดด้วย MathJax -->
+                    <div class="bg-blue-50 p-4 rounded-xl text-center overflow-x-auto text-lg mb-4">
+                        $$ F_d = 6 \pi \eta r v $$
+                    </div>
+                    <ul class="list-disc pl-5 space-y-1 text-sm text-slate-600">
+                        <li><strong>\(F_d\)</strong>: <span class="show-en">Viscous force (N)</span><span class="show-th">แรงหนืด (นิวตัน)</span></li>
+                        <li><strong>\(\eta\)</strong> (Eta): <span class="show-en">Dynamic viscosity (Pa·s)</span><span class="show-th">ความหนืดของของไหล (พาสคัล-วินาที)</span></li>
+                        <li><strong>\(r\)</strong>: <span class="show-en">Radius of the sphere (m)</span><span class="show-th">รัศมีของวัตถุทรงกลม (เมตร)</span></li>
+                        <li><strong>\(v\)</strong>: <span class="show-en">Velocity of the object (m/s)</span><span class="show-th">ความเร็วของวัตถุ (เมตร/วินาที)</span></li>
+                    </ul>
+                </div>
+
+                <!-- ส่วนการพิสูจน์ความเร็วปลาย พร้อมแผนภาพ Free Body Diagram -->
+                <div>
+                    <h3 class="text-xl font-semibold mb-2 text-blue-600">
+                        <span class="show-en">Terminal Velocity Proof</span>
+                        <span class="show-th">การพิสูจน์สมการ ความเร็วปลาย (Terminal Velocity)</span>
+                    </h3>
+                    <div class="bg-slate-50 p-5 rounded-xl border border-slate-200">
+                        <p class="text-sm text-slate-700 mb-3 leading-relaxed">
+                            <span class="show-en">When a sphere falls, it accelerates due to gravity. As velocity increases, viscous force (\(F_d\)) increases until net force is zero (\(a = 0\)). The object then falls at a constant speed called <strong>Terminal Velocity (\(v_t\))</strong>.</span>
+                            <span class="show-th">เมื่อทรงกลมตกลงมา ความเร็วจะเพิ่มขึ้นจากความเร่งโน้มถ่วง ทำให้แรงหนืด (\(F_d\)) เพิ่มตามจนกระทั่งแรงลัพธ์เป็นศูนย์ (\(a = 0\)) วัตถุจะตกลงมาด้วยความเร็วคงที่ เรียกว่า <strong>ความเร็วปลาย (\(v_t\))</strong></span>
+                        </p>
+                        
+                        <div class="flex flex-col sm:flex-row items-center sm:items-start gap-6 border-t border-slate-200 pt-4">
+                            <!-- Free Body Diagram (วาดด้วย SVG เพื่อความคมชัดและเบา) -->
+                            <div class="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex-shrink-0">
+                                <svg width="150" height="180" viewBox="0 0 150 180" xmlns="http://www.w3.org/2000/svg">
+                                    <defs>
+                                        <!-- หัวลูกศรสำหรับเวกเตอร์ -->
+                                        <marker id="arrow-red" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#dc2626"/></marker>
+                                        <marker id="arrow-blue" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/></marker>
+                                        <marker id="arrow-green" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#16a34a"/></marker>
+                                    </defs>
+                                    <rect x="0" y="0" width="150" height="180" fill="#f0f9ff" rx="8"/>
+                                    <circle cx="75" cy="90" r="20" fill="#cbd5e1" stroke="#64748b" stroke-width="2"/>
+                                    <!-- น้ำหนัก (W) ชี้ลง -->
+                                    <line x1="75" y1="110" x2="75" y2="155" stroke="#dc2626" stroke-width="3" marker-end="url(#arrow-red)"/>
+                                    <text x="85" y="150" fill="#dc2626" font-weight="bold" font-family="sans-serif" font-size="14">W</text>
+                                    <!-- แรงลอยตัว (Fb) ชี้ขึ้น -->
+                                    <line x1="60" y1="70" x2="60" y2="25" stroke="#2563eb" stroke-width="3" marker-end="url(#arrow-blue)"/>
+                                    <text x="25" y="40" fill="#2563eb" font-weight="bold" font-family="sans-serif" font-size="14">F_b</text>
+                                    <!-- แรงหนืด (Fd) ชี้ขึ้น -->
+                                    <line x1="90" y1="70" x2="90" y2="35" stroke="#16a34a" stroke-width="3" marker-end="url(#arrow-green)"/>
+                                    <text x="100" y="45" fill="#16a34a" font-weight="bold" font-family="sans-serif" font-size="14">F_d</text>
+                                </svg>
+                            </div>
+                            
+                            <!-- คำอธิบายตัวแปรในสมการ -->
+                            <div class="text-sm text-slate-600 flex-1 w-full bg-white p-4 rounded-lg border border-slate-200">
+                                <p class="font-bold mb-2 text-slate-800"><span class="show-en">Variables Definition:</span><span class="show-th">นิยามตัวแปร:</span></p>
+                                <ul class="list-none space-y-2">
+                                    <li><strong class="text-red-600">W</strong> = <span class="show-en">Weight (\( \rho_s V g \))</span><span class="show-th">น้ำหนักวัตถุ (\( \rho_s V g \))</span></li>
+                                    <li><strong class="text-blue-600">F_b</strong> = <span class="show-en">Buoyancy (\( \rho_f V g \))</span><span class="show-th">แรงลอยตัว (\( \rho_f V g \))</span></li>
+                                    <li><strong class="text-green-600">F_d</strong> = <span class="show-en">Viscous Drag (\( 6\pi\eta r v \))</span><span class="show-th">แรงหนืด (\( 6\pi\eta r v \))</span></li>
+                                    <li><strong class="text-slate-800">\(V\)</strong> = <span class="show-en">Volume (\( \frac{4}{3}\pi r^3 \))</span><span class="show-th">ปริมาตรทรงกลม (\( \frac{4}{3}\pi r^3 \))</span></li>
+                                    <li><strong class="text-slate-800">\(\rho_s, \rho_f\)</strong> = <span class="show-en">Density of object & fluid</span><span class="show-th">ความหนาแน่นวัตถุ & ของไหล</span></li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <!-- ลำดับการแก้สมการ -->
+                        <div class="overflow-x-auto text-sm mt-6">
+                            <span class="show-en">From Newton's 1st Law (Downwards is positive):</span>
+                            <span class="show-th">จากกฎข้อที่ 1 ของนิวตัน (ให้ทิศลงเป็นบวก):</span>
+                            $$ \sum F = 0 \implies W - F_b - F_d = 0 $$
+                            <span class="show-en">Substitute the equations for each force:</span>
+                            <span class="show-th">แทนค่าสมการของแรงแต่ละชนิด:</span>
+                            $$ 6 \pi \eta r v_t = \rho_s V g - \rho_f V g $$
+                            $$ 6 \pi \eta r v_t = (\rho_s - \rho_f) \left( \frac{4}{3}\pi r^3 \right) g $$
+                            <span class="show-en">Solve for \(v_t\):</span>
+                            <span class="show-th">จัดรูปสมการเพื่อหา \(v_t\):</span>
+                            $$ v_t = \frac{2}{9} \frac{r^2 g (\rho_s - \rho_f)}{\eta} $$
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ================= SECTION 2: ตารางข้อมูลอ้างอิง (Fluid Properties Table) ================= -->
+        <section class="bg-white p-8 rounded-2xl shadow-md border border-slate-100">
+            <h2 class="text-2xl font-bold mb-6 text-slate-800">
+                <span class="show-en">Fluid Properties Reference (at 20°C)</span>
+                <span class="show-th">ตารางอ้างอิงสมบัติของของไหล (ที่อุณหภูมิ 20°C)</span>
+            </h2>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse min-w-[600px]">
+                    <thead>
+                        <tr class="bg-blue-50 text-slate-700">
+                            <th class="p-4 border-b-2 border-slate-200 font-bold"><span class="show-en">Fluid</span><span class="show-th">ชนิดของไหล</span></th>
+                            <th class="p-4 border-b-2 border-slate-200 font-bold"><span class="show-en">Density, \( \rho \) (kg/m³)</span><span class="show-th">ความหนาแน่น, \( \rho \) (kg/m³)</span></th>
+                            <th class="p-4 border-b-2 border-slate-200 font-bold"><span class="show-en">Viscosity, \( \eta \) (Pa·s)</span><span class="show-th">ความหนืด, \( \eta \) (Pa·s)</span></th>
+                        </tr>
+                    </thead>
+                    <tbody class="text-slate-600">
+                        <tr class="border-b border-slate-100 hover:bg-slate-50 transition">
+                            <td class="p-4 font-medium"><span class="show-en">Air</span><span class="show-th">อากาศ (Air)</span></td>
+                            <td class="p-4">1.2</td>
+                            <td class="p-4">1.8 × 10⁻⁵</td>
+                        </tr>
+                        <tr class="border-b border-slate-100 hover:bg-slate-50 transition">
+                            <td class="p-4 font-medium"><span class="show-en">Ethanol</span><span class="show-th">เอทานอล (Ethanol)</span></td>
+                            <td class="p-4">789</td>
+                            <td class="p-4">1.2 × 10⁻³</td>
+                        </tr>
+                        <tr class="border-b border-slate-100 hover:bg-slate-50 transition">
+                            <td class="p-4 font-medium"><span class="show-en">Water</span><span class="show-th">น้ำ (Water)</span></td>
+                            <td class="p-4">1000</td>
+                            <td class="p-4">1.0 × 10⁻³</td>
+                        </tr>
+                        <tr class="border-b border-slate-100 hover:bg-slate-50 transition">
+                            <td class="p-4 font-medium"><span class="show-en">Motor Oil (SAE 30)</span><span class="show-th">น้ำมันเครื่อง (Motor Oil)</span></td>
+                            <td class="p-4">880</td>
+                            <td class="p-4">0.2</td>
+                        </tr>
+                        <tr class="border-b border-slate-100 hover:bg-slate-50 transition">
+                            <td class="p-4 font-medium"><span class="show-en">Castor Oil</span><span class="show-th">น้ำมันละหุ่ง (Castor Oil)</span></td>
+                            <td class="p-4">961</td>
+                            <td class="p-4">0.985</td>
+                        </tr>
+                        <tr class="border-b border-slate-100 hover:bg-slate-50 transition">
+                            <td class="p-4 font-medium"><span class="show-en">Corn Syrup</span><span class="show-th">น้ำเชื่อมข้าวโพด (Corn Syrup)</span></td>
+                            <td class="p-4">1380</td>
+                            <td class="p-4">1.38</td>
+                        </tr>
+                        <tr class="border-b border-slate-100 hover:bg-slate-50 transition">
+                            <td class="p-4 font-medium"><span class="show-en">Glycerin</span><span class="show-th">กลีเซอรีน (Glycerin)</span></td>
+                            <td class="p-4">1260</td>
+                            <td class="p-4">1.4</td>
+                        </tr>
+                        <tr class="border-b border-slate-100 hover:bg-slate-50 transition">
+                            <td class="p-4 font-medium"><span class="show-en">Honey</span><span class="show-th">น้ำผึ้ง (Honey)</span></td>
+                            <td class="p-4">1420</td>
+                            <td class="p-4">10.0</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- ================= SECTION 3: แบบจำลองฟิสิกส์ 2 มิติ (Physics Simulation) ================= -->
+        <section class="bg-white p-8 rounded-2xl shadow-md border border-slate-100">
+            <h2 class="text-2xl font-bold mb-6 text-slate-800">
+                <span class="show-en">Adjustable Tube Physics Simulation</span>
+                <span class="show-th">แบบจำลองฟิสิกส์ในท่อ (ปรับความสูงได้)</span>
+            </h2>
+            <p class="mb-6 text-slate-600">
+                <span class="show-en">Observe an object falling through a fluid tube. The simulation leaves a marker relative to real depth, adjusting playback speed to prevent excessive waiting!</span>
+                <span class="show-th">จำลองการตกของวัตถุในท่อของไหล กราฟและเวลาอ้างอิงจากหลักฟิสิกส์ 100% ระบบจะปรับความเร็วการเล่นอัตโนมัติ (ดูที่ช่อง Speed) เพื่อป้องกันการรอคอยที่นานเกินไปในของเหลวที่มีความหนืดสูง</span>
+            </p>
+
+            <div class="grid md:grid-cols-12 gap-8">
+                
+                <!-- แผงควบคุมตัวแปร (Controls Panel) -->
+                <div class="md:col-span-4 bg-slate-50 p-5 rounded-xl border border-slate-200 space-y-5">
+                    <h3 class="font-bold text-lg text-slate-700 border-b pb-2">
+                        <span class="show-en">Parameters</span><span class="show-th">ตั้งค่าตัวแปร</span>
+                    </h3>
+                    
+                    <!-- เลือกชนิดของไหล -->
+                    <div class="control-group">
+                        <label class="control-label"><span class="show-en">Fluid Type</span><span class="show-th">ชนิดของไหล</span></label>
+                        <select id="fluidType" class="w-full p-2 border rounded-md" onchange="onFluidSelectChange()"></select>
+                        
+                        <!-- ช่องกรอกความหนาแน่นและความหนืดด้วยตนเอง (จะทำงานเมื่อเลือก Custom) -->
+                        <div class="grid grid-cols-2 gap-2 mt-2">
+                            <div class="control-group">
+                                <label class="text-xs text-slate-500 font-semibold">ρ (kg/m³)</label>
+                                <input type="number" id="customFluidRho" class="w-full p-1.5 border rounded-md text-sm bg-white" step="1" oninput="onCustomFluidInput()">
+                            </div>
+                            <div class="control-group">
+                                <label class="text-xs text-slate-500 font-semibold">η (Pa·s)</label>
+                                <!-- แก้ step เป็น any เพื่อให้รองรับทศนิยมเยอะๆ อย่างของอากาศ 1.8e-5 ได้ -->
+                                <input type="number" id="customFluidEta" class="w-full p-1.5 border rounded-md text-sm bg-white" step="any" oninput="onCustomFluidInput()">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- เลือกชนิดวัตถุ -->
+                    <div class="control-group mt-4">
+                        <label class="control-label"><span class="show-en">Object Material</span><span class="show-th">ชนิดของวัตถุ</span></label>
+                        <select id="objMaterial" class="w-full p-2 border rounded-md" onchange="updateSimParams()"></select>
+                    </div>
+
+                    <!-- แถบเลื่อนปรับรัศมีวัตถุ -->
+                    <div class="control-group">
+                        <label class="control-label flex justify-between">
+                            <span><span class="show-en">Radius (r)</span><span class="show-th">รัศมีวัตถุ (r)</span></span>
+                            <span id="radiusVal" class="text-blue-600 font-bold">10 mm</span>
+                        </label>
+                        <input type="range" id="objRadius" min="2" max="25" value="10" step="1" class="w-full" oninput="updateSimParams()">
+                    </div>
+
+                    <!-- แถบเลื่อนปรับความสูงของท่อ -->
+                    <div class="control-group">
+                        <label class="control-label flex justify-between">
+                            <span><span class="show-en">Tube Height</span><span class="show-th">ความสูงของท่อ</span></span>
+                            <span id="tubeHeightVal" class="text-blue-600 font-bold">5.0 m</span>
+                        </label>
+                        <input type="range" id="tubeHeight" min="1" max="20" value="5" step="0.5" class="w-full" oninput="updateTubeHeight()">
+                    </div>
+
+                    <!-- แถบเลื่อนปรับตำแหน่งเริ่มต้นปล่อยวัตถุ -->
+                    <div class="control-group">
+                        <label class="control-label flex justify-between">
+                            <span><span class="show-en">Start Height</span><span class="show-th">ระดับความสูงเริ่มต้น</span></span>
+                            <span id="startHeightVal" class="text-blue-600 font-bold">0.0 m</span>
+                        </label>
+                        <input type="range" id="startHeight" min="0" max="4.5" value="0" step="0.1" class="w-full" oninput="previewPosition()">
+                    </div>
+
+                    <!-- ปุ่มควบคุม Play / Reset -->
+                    <div class="pt-4 flex gap-2">
+                        <button onclick="startSim()" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg font-medium transition">
+                            <span class="show-en">Play / Drop</span><span class="show-th">ปล่อยวัตถุ</span>
+                        </button>
+                        <button onclick="resetSim()" class="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-800 py-2 rounded-lg font-medium transition">
+                            <span class="show-en">Reset</span><span class="show-th">ตั้งค่าใหม่</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- พื้นที่แสดงผลกราฟิก (Canvas Area) -->
+                <div class="md:col-span-3 flex flex-col items-center justify-start relative">
+                    <canvas id="simCanvas" width="350" height="600" class="border border-slate-300 mb-4 shadow-sm"></canvas>
+
+                    <!-- คำอธิบายสีลูกศร (Legend) - ย้ายมาไว้ด้านล่างเพื่อไม่ให้บังวัตถุ -->
+                    <div class="flex flex-wrap justify-center gap-4 bg-slate-50 p-2.5 rounded-lg text-xs border border-slate-200 w-full max-w-[350px]">
+                        <div class="flex items-center gap-1.5"><div class="w-3 h-3 bg-red-600 rounded-sm"></div> <span class="show-en font-medium">Weight</span><span class="show-th font-medium">น้ำหนัก</span></div>
+                        <div class="flex items-center gap-1.5"><div class="w-3 h-3 bg-blue-500 rounded-sm"></div> <span class="show-en font-medium">Buoyancy</span><span class="show-th font-medium">แรงลอยตัว</span></div>
+                        <div class="flex items-center gap-1.5"><div class="w-3 h-3 bg-green-500 rounded-sm"></div> <span class="show-en font-medium">Drag</span><span class="show-th font-medium">แรงหนืด</span></div>
+                    </div>
+                </div>
+
+                <!-- พื้นที่แสดงผลกราฟความเร็ว (Chart Area) -->
+                <div class="md:col-span-5 flex flex-col">
+                    <div class="bg-white p-4 rounded-xl border border-slate-200 h-full flex flex-col min-h-[300px]">
+                        <h3 class="text-sm font-bold text-center mb-2 text-slate-600">
+                            <span class="show-en">Velocity vs Time</span><span class="show-th">กราฟความเร็ว - เวลา</span>
+                        </h3>
+                        <div class="flex-1 relative">
+                            <!-- กราฟ Chart.js จะมาแสดงตรงนี้ -->
+                            <canvas id="velChart"></canvas>
+                        </div>
+                        <div id="terminalVelocityDisplay" class="text-center text-sm font-bold mt-2 min-h-[40px] flex items-center justify-center">
+                            <!-- แสดงค่า vt หรือข้อความเตือนเมื่อท่อสั้นเกินไป -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ================= SECTION 4: ตัวอย่างโจทย์คำนวณ (Interactive Examples) ================= -->
+        <section class="bg-white p-8 rounded-2xl shadow-md border border-slate-100">
+            <h2 class="text-2xl font-bold mb-6 text-slate-800">
+                <span class="show-en">Mathematical Examples</span>
+                <span class="show-th">ตัวอย่างโจทย์แบบโต้ตอบ</span>
+            </h2>
+
+            <div class="space-y-8">
+                <!-- Example 1: หาความเร็วปลาย -->
+                <div class="border-2 border-blue-100 rounded-xl p-6 bg-blue-50/30">
+                    <h3 class="text-lg font-bold mb-4">
+                        <span class="show-en">Example 1: Finding Terminal Velocity</span>
+                        <span class="show-th">ข้อที่ 1: การหาความเร็วปลาย (Terminal Velocity)</span>
+                    </h3>
+                    <div class="flex flex-wrap items-center gap-2 text-lg mb-6 bg-white p-4 rounded-lg shadow-sm">
+                        <span class="show-en">A steel ball with radius</span>
+                        <span class="show-th">ลูกเหล็กทรงกลม รัศมี</span>
+                        <input type="number" id="ex1_r" value="2.0" step="0.1" class="input-box bg-blue-50" oninput="solveEx1()">
+                        <span>mm</span>
+                        <span class="show-en">and density</span>
+                        <span class="show-th">และความหนาแน่น</span>
+                        <input type="number" id="ex1_rhos" value="7800" step="100" class="input-box bg-blue-50" oninput="solveEx1()">
+                        <span>kg/m³</span>
+                        <span class="show-en">falls in glycerin (density</span>
+                        <span class="show-th">ตกลงในกลีเซอรีน (ความหนาแน่น</span>
+                        <input type="number" id="ex1_rhof" value="1260" step="10" class="input-box bg-blue-50" oninput="solveEx1()">
+                        <span>kg/m³</span>
+                        <span class="show-en">, viscosity</span>
+                        <span class="show-th">, ความหนืด</span>
+                        <input type="number" id="ex1_eta" value="1.5" step="0.1" class="input-box bg-blue-50" oninput="solveEx1()">
+                        <span>Pa·s).</span>
+                        <span class="show-en">Find its terminal velocity. (g = 9.8 m/s²)</span>
+                        <span class="show-th">จงหาความเร็วปลายของลูกเหล็กนี้ (g = 9.8 m/s²)</span>
+                    </div>
+                    
+                    <div id="solution1" class="bg-white p-6 rounded-lg border border-slate-200 overflow-x-auto"></div>
+                </div>
+
+                <!-- Example 2: หาแรงหนืด -->
+                <div class="border-2 border-emerald-100 rounded-xl p-6 bg-emerald-50/30">
+                    <h3 class="text-lg font-bold mb-4">
+                        <span class="show-en">Example 2: Calculating Viscous Force</span>
+                        <span class="show-th">ข้อที่ 2: การคำนวณหาแรงหนืด</span>
+                    </h3>
+                    <div class="flex flex-wrap items-center gap-2 text-lg mb-6 bg-white p-4 rounded-lg shadow-sm">
+                        <span class="show-en">A small raindrop with radius</span>
+                        <span class="show-th">หยดน้ำฝนขนาดเล็ก รัศมี</span>
+                        <input type="number" id="ex2_r" value="1.5" step="0.1" class="input-box bg-emerald-50" oninput="solveEx2()">
+                        <span>mm</span>
+                        <span class="show-en">is falling through air (viscosity</span>
+                        <span class="show-th">กำลังตกลงมาในอากาศ (ความหนืดของอากาศ</span>
+                        <input type="number" id="ex2_eta" value="1.8" step="0.1" class="input-box bg-emerald-50" oninput="solveEx2()">
+                        <span>× 10⁻⁵ Pa·s)</span>
+                        <span class="show-en">with a velocity of</span>
+                        <span class="show-th">ด้วยความเร็ว</span>
+                        <input type="number" id="ex2_v" value="5.0" step="0.5" class="input-box bg-emerald-50" oninput="solveEx2()">
+                        <span>m/s.</span>
+                        <span class="show-en">What is the viscous drag force?</span>
+                        <span class="show-th">จงหาแรงหนืด (Drag force) ที่เกิดขึ้น</span>
+                    </div>
+                    
+                    <div id="solution2" class="bg-white p-6 rounded-lg border border-slate-200 overflow-x-auto"></div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- ================= FOOTER ================= -->
+    <footer class="bg-slate-800 text-slate-300 py-8 mt-12 text-center text-sm">
+        <div class="max-w-6xl mx-auto px-4 flex flex-col md:flex-row justify-between items-center opacity-80">
+            <p>&copy; 2026 Educational Physics Simulation</p>
+            <div class="flex space-x-6 mt-4 md:mt-0">
+                <p>Knowledge Resource: <a href="https://opensimlab.org" target="_blank" class="text-white font-semibold hover:underline">OpenSimLab.org</a></p>
+                <p>Coded by <span class="text-white font-semibold">Gemini</span></p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- ================= JAVASCRIPT LOGIC ================= -->
+    <script>
+        // ---------------------------------------------------------
+        // 1. Data Definitions (ฐานข้อมูลคุณสมบัติของของไหลและวัตถุ)
+        // ---------------------------------------------------------
+        const dropdownData = {
+            fluids: [
+                { id: 'air', en: 'Air (η=1.8e-5, ρ=1.2)', th: 'อากาศ (η=1.8e-5, ρ=1.2)' },
+                { id: 'ethanol', en: 'Ethanol (η=0.0012, ρ=789)', th: 'เอทานอล (η=0.0012, ρ=789)' },
+                { id: 'water', en: 'Water (η=0.001, ρ=1000)', th: 'น้ำ (η=0.001, ρ=1000)' },
+                { id: 'motor_oil', en: 'Motor Oil (η=0.2, ρ=880)', th: 'น้ำมันเครื่อง (η=0.2, ρ=880)' },
+                { id: 'castor_oil', en: 'Castor Oil (η=0.985, ρ=961)', th: 'น้ำมันละหุ่ง (η=0.985, ρ=961)' },
+                { id: 'corn_syrup', en: 'Corn Syrup (η=1.38, ρ=1380)', th: 'น้ำเชื่อมข้าวโพด (η=1.38, ρ=1380)' },
+                { id: 'glycerin', en: 'Glycerin (η=1.4, ρ=1260)', th: 'กลีเซอรีน (η=1.4, ρ=1260)' },
+                { id: 'honey', en: 'Honey (η=10.0, ρ=1420)', th: 'น้ำผึ้ง (η=10.0, ρ=1420)' },
+                { id: 'custom', en: 'Custom / Manual Input', th: 'กำหนดค่าเอง (พิมพ์ตัวเลขด้านล่าง)' }
+            ],
+            materials: [
+                { id: 'steel', en: 'Steel Ball (ρ=7800)', th: 'ลูกเหล็ก (ρ=7800)' },
+                { id: 'glass', en: 'Glass Marble (ρ=2500)', th: 'ลูกแก้ว (ρ=2500)' },
+                { id: 'wood', en: 'Wood Ball (Floats, ρ=700)', th: 'ลูกไม้ (ลอยน้ำ, ρ=700)' }
+            ]
+        };
+
+        const physicsData = {
+            fluids: {
+                air: { rho: 1.2, eta: 0.000018 },
+                ethanol: { rho: 789, eta: 0.0012 },
+                water: { rho: 1000, eta: 0.001 },
+                motor_oil: { rho: 880, eta: 0.2 },
+                castor_oil: { rho: 961, eta: 0.985 },
+                corn_syrup: { rho: 1380, eta: 1.38 },
+                glycerin: { rho: 1260, eta: 1.4 },
+                honey: { rho: 1420, eta: 10.0 }
+            },
+            materials: {
+                steel: { rho: 7800 },
+                glass: { rho: 2500 },
+                wood: { rho: 700 }
+            }
+        };
+
+        // ---------------------------------------------------------
+        // 2. Language Toggle Logic (ฟังก์ชันเปลี่ยนภาษา)
+        // ---------------------------------------------------------
+        function updateDropdownTexts(lang) {
+            const fluidSelect = document.getElementById('fluidType');
+            const matSelect = document.getElementById('objMaterial');
+            
+            const fVal = fluidSelect.value;
+            const mVal = matSelect.value;
+
+            fluidSelect.innerHTML = dropdownData.fluids.map(f => 
+                `<option value="${f.id}">${lang === 'th' ? f.th : f.en}</option>`
+            ).join('');
+            
+            matSelect.innerHTML = dropdownData.materials.map(m => 
+                `<option value="${m.id}">${lang === 'th' ? m.th : m.en}</option>`
+            ).join('');
+
+            if(fVal) fluidSelect.value = fVal;
+            if(mVal) matSelect.value = mVal;
+        }
+
+        function toggleLanguage() {
+            const body = document.body;
+            const toggleContainer = document.getElementById('langToggle');
+            let currentLang = 'en';
+            
+            if (body.classList.contains('lang-en')) {
+                body.classList.remove('lang-en');
+                body.classList.add('lang-th');
+                toggleContainer.setAttribute('data-lang', 'th');
+                currentLang = 'th';
+            } else {
+                body.classList.remove('lang-th');
+                body.classList.add('lang-en');
+                toggleContainer.setAttribute('data-lang', 'en');
+                currentLang = 'en';
+            }
+            
+            updateDropdownTexts(currentLang);
+            solveEx1();
+            solveEx2();
+            updateChartLabels();
+            previewPosition(); // เรียกใหม่เพื่อให้ข้อความในกล่องแจ้งเตือนถูกแปล
+        }
+
+        // ---------------------------------------------------------
+        // 3. Interactive Examples Logic (โจทย์คำนวณ)
+        // ---------------------------------------------------------
+        function formatSci(num) {
+            return num.toExponential(3).replace('e', ' \\times 10^{').replace('+', '') + '}';
+        }
+
+        function solveEx1() {
+            const isTh = document.body.classList.contains('lang-th');
+            const r_mm = parseFloat(document.getElementById('ex1_r').value);
+            const rho_s = parseFloat(document.getElementById('ex1_rhos').value);
+            const rho_f = parseFloat(document.getElementById('ex1_rhof').value);
+            const eta = parseFloat(document.getElementById('ex1_eta').value);
+            const g = 9.8;
+
+            if (isNaN(r_mm) || isNaN(rho_s) || isNaN(rho_f) || isNaN(eta)) return;
+
+            const r = r_mm / 1000;
+            const vt = (2/9) * ((rho_s - rho_f) * g * (r*r)) / eta;
+
+            const html = `
+                <div class="space-y-4">
+                    <p class="font-semibold text-slate-700">${isTh ? 'วิธีทำ:' : 'Solution:'}</p>
+                    <div class="text-center">$$ v_t = \\frac{2}{9} \\frac{r^2 g (\\rho_s - \\rho_f)}{\\eta} $$</div>
+                    <ul class="list-disc pl-8 mb-4 text-slate-600">
+                        <li>\\( r = ${r_mm} \\times 10^{-3} \\) m</li>
+                        <li>\\( \\rho_s = ${rho_s} \\) kg/m³ , \\( \\rho_f = ${rho_f} \\) kg/m³</li>
+                        <li>\\( \\eta = ${eta} \\) Pa·s</li>
+                    </ul>
+                    <div class="text-center overflow-x-auto">
+                        $$ v_t = \\frac{2}{9} \\frac{(${r_mm} \\times 10^{-3})^2 (9.8) (${rho_s} - ${rho_f})}{${eta}} $$
+                    </div>
+                    <div class="text-center font-bold text-blue-700 text-xl mt-4">
+                        $$ v_t = ${vt.toFixed(4)} \\text{ m/s} $$
+                    </div>
+                </div>
+            `;
+            document.getElementById('solution1').innerHTML = html;
+            if(window.MathJax && window.MathJax.typesetPromise) {
+                MathJax.typesetPromise([document.getElementById('solution1')]);
+            }
+        }
+
+        function solveEx2() {
+            const isTh = document.body.classList.contains('lang-th');
+            const r_mm = parseFloat(document.getElementById('ex2_r').value);
+            const eta_base = parseFloat(document.getElementById('ex2_eta').value);
+            const v = parseFloat(document.getElementById('ex2_v').value);
+
+            if (isNaN(r_mm) || isNaN(eta_base) || isNaN(v)) return;
+
+            const r = r_mm / 1000;
+            const eta = eta_base * 1e-5;
+            const fd = 6 * Math.PI * eta * r * v;
+
+            const html = `
+                <div class="space-y-4">
+                    <p class="font-semibold text-slate-700">${isTh ? 'วิธีทำ:' : 'Solution:'}</p>
+                    <div class="text-center">$$ F_d = 6 \\pi \\eta r v $$</div>
+                    <ul class="list-disc pl-8 mb-4 text-slate-600">
+                        <li>\\( r = ${r_mm} \\times 10^{-3} \\) m</li>
+                        <li>\\( \\eta = ${eta_base} \\times 10^{-5} \\) Pa·s</li>
+                        <li>\\( v = ${v} \\) m/s</li>
+                    </ul>
+                    <div class="text-center overflow-x-auto">
+                        $$ F_d = 6 \\pi (${eta_base} \\times 10^{-5})(${r_mm} \\times 10^{-3})(${v}) $$
+                    </div>
+                    <div class="text-center font-bold text-emerald-700 text-xl mt-4">
+                        $$ F_d = ${formatSci(fd)} \\text{ N} $$
+                    </div>
+                </div>
+            `;
+            document.getElementById('solution2').innerHTML = html;
+            if(window.MathJax && window.MathJax.typesetPromise) {
+                MathJax.typesetPromise([document.getElementById('solution2')]);
+            }
+        }
+
+        // ---------------------------------------------------------
+        // 4. Core Physics Simulation Logic (ระบบจำลองฟิสิกส์ 2 มิติ)
+        // ---------------------------------------------------------
+        let canvas, ctx, myChart;
+        let simRunning = false;
+        let animationId;
+        
+        let params = { rho_s: 7800, rho_f: 1260, eta: 1.4, r_m: 0.01 }; 
+        let state = { y_m: 0, v: 0, time: 0 };
+        const g = 9.8;
+        
+        let tankHeight_m = 5.0; 
+        let pixelsPerMeter = 100; 
+        let forceScale = 1; 
+        
+        let markers = [];
+        let nextMarkerTime = 0.2;
+        let markerInterval = 0.2; // ระบบปรับระยะ marker อัตโนมัติ
+
+        let simMaxTime = 1.0; 
+        let simSpeedMultiplier = 1.0; // ตัวคูณเร่ง/ลดเวลา เพื่อไม่ให้ผู้เล่นรอนานไป
+
+        function initSim() {
+            // สร้าง Dropdown ทันทีเมื่อโหลด เพื่อป้องกันบั๊กการตั้งค่าผิดพลาด
+            updateDropdownTexts(document.body.classList.contains('lang-th') ? 'th' : 'en');
+
+            document.getElementById('fluidType').value = 'glycerin';
+            document.getElementById('objMaterial').value = 'steel';
+            
+            document.getElementById('customFluidRho').value = physicsData.fluids['glycerin'].rho;
+            document.getElementById('customFluidEta').value = physicsData.fluids['glycerin'].eta;
+            
+            canvas = document.getElementById('simCanvas');
+            ctx = canvas.getContext('2d');
+            
+            const topPadding = 20;
+            const bottomPadding = 20;
+            const availableHeight = canvas.height - topPadding - bottomPadding;
+            pixelsPerMeter = availableHeight / tankHeight_m;
+            
+            const ctxChart = document.getElementById('velChart').getContext('2d');
+            myChart = new Chart(ctxChart, {
+                type: 'line',
+                data: { datasets: [{ label: 'Velocity', data: [], borderColor: 'rgb(37, 99, 235)', backgroundColor: 'rgba(37, 99, 235, 0.1)', borderWidth: 2, fill: true, pointRadius: 0, tension: 0.1 }] },
+                options: {
+                    responsive: true, maintainAspectRatio: false, animation: false,
+                    scales: {
+                        // ปรับให้กราฟเป็นประเภทแกน Linear เพื่อความแม่นยำทางคณิตศาสตร์ 100%
+                        x: { type: 'linear', min: 0, title: { display: true, text: 'Time (s)' } },
+                        y: { title: { display: true, text: 'Velocity (m/s)' } }
+                    },
+                    plugins: { legend: { display: false }, tooltip: { enabled: false } }
+                }
+            });
+
+            updateSimParams();
+            setTimeout(() => { solveEx1(); solveEx2(); }, 800);
+        }
+
+        function onFluidSelectChange() {
+            const fType = document.getElementById('fluidType').value;
+            if (fType !== 'custom' && physicsData.fluids[fType]) {
+                document.getElementById('customFluidRho').value = physicsData.fluids[fType].rho;
+                document.getElementById('customFluidEta').value = physicsData.fluids[fType].eta;
+            }
+            updateSimParams();
+        }
+
+        function onCustomFluidInput() {
+            document.getElementById('fluidType').value = 'custom';
+            updateSimParams();
+        }
+
+        function updateChartLabels() {
+            if(!myChart) return;
+            const isTh = document.body.classList.contains('lang-th');
+            myChart.options.scales.x.title.text = isTh ? 'เวลา (s)' : 'Time (s)';
+            myChart.options.scales.y.title.text = isTh ? 'ความเร็ว (m/s)' : 'Velocity (m/s)';
+            myChart.update();
+        }
+
+        function updateSimParams() {
+            const mType = document.getElementById('objMaterial').value || 'steel';
+            const r_mm = parseFloat(document.getElementById('objRadius').value);
+            
+            params.rho_f = parseFloat(document.getElementById('customFluidRho').value) || 1000;
+            params.eta = parseFloat(document.getElementById('customFluidEta').value) || 0.001;
+            
+            // ป้องกันไม่ให้ค่าความหนืดเป็นศูนย์หรือติดลบ 
+            if (params.eta <= 0) params.eta = 0.00001; 
+
+            params.rho_s = physicsData.materials[mType].rho;
+            params.r_m = r_mm / 1000;
+            
+            document.getElementById('radiusVal').innerText = r_mm + " mm";
+            
+            const vol = (4/3) * Math.PI * Math.pow(params.r_m, 3);
+            const maxW = vol * Math.max(7800, params.rho_s) * g; 
+            forceScale = (canvas.height / 5) / maxW; 
+
+            previewPosition();
+        }
+
+        function updateTubeHeight() {
+            tankHeight_m = parseFloat(document.getElementById('tubeHeight').value);
+            document.getElementById('tubeHeightVal').innerText = tankHeight_m.toFixed(1) + " m";
+            
+            const startHeightInput = document.getElementById('startHeight');
+            startHeightInput.max = Math.max(0, tankHeight_m - 0.5).toString(); 
+            if (parseFloat(startHeightInput.value) > tankHeight_m) {
+                startHeightInput.value = Math.max(0, tankHeight_m - 0.5).toString();
+            }
+            
+            const topPadding = 20;
+            const bottomPadding = 20;
+            const availableHeight = canvas.height - topPadding - bottomPadding;
+            pixelsPerMeter = availableHeight / tankHeight_m;
+            
+            previewPosition();
+        }
+
+        // ฟังก์ชันหัวใจสำคัญ! จำลองการตกแบบล่วงหน้าเงียบๆ เพื่อหาขอบเขตกราฟ ป้องกันแกนสเกลเด้งไปมา
+        function precalcSimulation() {
+            let sim_y = parseFloat(document.getElementById('startHeight').value);
+            let sim_v = 0;
+            let sim_t = 0;
+            const DT = 0.01;
+            
+            const vol = (4/3) * Math.PI * Math.pow(params.r_m, 3);
+            const m = vol * params.rho_s;
+            const W = m * g;
+            const Fb = vol * params.rho_f * g;
+            
+            let min_v = 0;
+            let max_v = 0;
+            let iterations = 0;
+            
+            // จำกัดจำนวนลูปกันค้าง เผื่อผู้ใช้ตั้งค่าแปลกๆ แล้ววัตถุแทบไม่ขยับ
+            while (iterations < 100000) { 
+                const Fd_mag = 6 * Math.PI * params.eta * params.r_m * Math.abs(sim_v);
+                const dir = sim_v >= 0 ? 1 : -1; 
+                const Fnet = W - Fb - (Fd_mag * dir);
+                const a = Fnet / m;
+                
+                sim_v += a * DT;
+                sim_y += sim_v * DT;
+                sim_t += DT;
+                
+                if (sim_v > max_v) max_v = sim_v;
+                if (sim_v < min_v) min_v = sim_v;
+                
+                // สิ้นสุดเมื่อชนพื้น หรือพ้นผิวน้ำ(กรณีลอย)
+                if (sim_y >= tankHeight_m && sim_v > 0) break;
+                if (sim_y <= 0 && sim_v < 0) break;
+                
+                // ออกจากลูปถ้านิ่งสนิทจริงๆ
+                if (Math.abs(a) < 1e-6 && Math.abs(sim_v) < 1e-6) break;
+                
+                iterations++;
+            }
+            
+            return { max_t: Math.max(0.1, sim_t), max_v: max_v, min_v: min_v };
+        }
+
+        // ตั้งค่ากราฟและเตรียมพร้อมสำหรับการรันแอนิเมชัน
+        function previewPosition() {
+            simRunning = false;
+            if (animationId) cancelAnimationFrame(animationId);
+            
+            const startM = parseFloat(document.getElementById('startHeight').value);
+            document.getElementById('startHeightVal').innerText = startM.toFixed(1) + " m";
+            state.y_m = startM;
+            state.v = 0;
+            state.time = 0;
+            markers = [];
+            
+            // คำนวณความเร็วและเวลาสูงสุดที่วัตถุจะใช้เดินทางถึงพื้น
+            const bounds = precalcSimulation();
+            simMaxTime = bounds.max_t;
+            
+            // 1. ระบบลดระยะเวลาการรอของผู้เรียนให้เหลือประมาณ 3-4 วินาที 
+            // ถ้าน้ำผึ้งตก 100 วินาที จะถูกเร่งสปีดให้แสดงผลจบในเวลาไม่นาน
+            simSpeedMultiplier = simMaxTime / 4.0;
+            if (simSpeedMultiplier < 0.1) simSpeedMultiplier = 0.1; 
+            if (simSpeedMultiplier > 1000) simSpeedMultiplier = 1000;
+            
+            // 2. ระบบป้องกันจุดบนหน้าจอเยอะเกินไป (ปรับระยะการมาร์กจุดตามเวลาที่ใช้ตกทั้งหมด)
+            if (simMaxTime <= 1) markerInterval = 0.1;
+            else if (simMaxTime <= 2) markerInterval = 0.2;
+            else if (simMaxTime <= 5) markerInterval = 0.5;
+            else if (simMaxTime <= 10) markerInterval = 1.0;
+            else if (simMaxTime <= 20) markerInterval = 2.0;
+            else if (simMaxTime <= 50) markerInterval = 5.0;
+            else if (simMaxTime <= 100) markerInterval = 10.0;
+            else markerInterval = 20.0;
+            
+            nextMarkerTime = markerInterval;
+            
+            // รีเซ็ตกราฟให้เป็น 0 เสมอ
+            chartData = [{ x: 0, y: 0 }];
+            lastChartTime = 0;
+            physicsAccumulator = 0;
+            
+            if (myChart) {
+                myChart.data.datasets[0].data = chartData;
+                myChart.options.scales.x.min = 0;
+                myChart.options.scales.x.max = simMaxTime * 1.05; // เผื่อขอบแกน X นิดหน่อย
+                
+                const padMax = bounds.max_v * 1.1;
+                const padMin = bounds.min_v * 1.1;
+
+                // ล็อกแกน Y ให้คงที่ตลอดการรันแอนิเมชัน ไม่กระตุกหรือบีบสเกลหนีเส้นกราฟ!
+                if (bounds.min_v < -0.001 && bounds.max_v <= 0.001) { 
+                    myChart.options.scales.y.min = padMin;
+                    myChart.options.scales.y.max = 0;
+                } else if (bounds.max_v > 0.001 && bounds.min_v >= -0.001) { 
+                    myChart.options.scales.y.min = 0;
+                    myChart.options.scales.y.max = padMax;
+                } else { 
+                    myChart.options.scales.y.min = padMin - 0.1;
+                    myChart.options.scales.y.max = padMax + 0.1;
+                }
+                
+                myChart.update();
+            }
+
+            // คำนวณความเร็วปลายเชิงทฤษฎีและประเมินผลลัพธ์
+            const vt = (2/9) * (params.rho_s - params.rho_f) * g * Math.pow(params.r_m, 2) / params.eta;
+            const isTh = document.body.classList.contains('lang-th');
+            const msgEl = document.getElementById('terminalVelocityDisplay');
+            
+            // หาความเร็วสูงสุดที่ทำได้ในท่อความสูงที่ตั้งไว้ 
+            const simMaxSpeed = Math.max(Math.abs(bounds.max_v), Math.abs(bounds.min_v));
+            
+            // ถ้าตกลงมาจนถึง 95% ของความเร็วปลาย แสดงว่ากราฟโค้งเป็นความเร็วปลายแล้ว
+            if (simMaxSpeed >= Math.abs(vt) * 0.95) {
+                msgEl.innerText = isTh ? `ความเร็วปลายทฤษฎี (vt) = ${vt.toFixed(4)} m/s` : `Theoretical Terminal Velocity (vt) = ${vt.toFixed(4)} m/s`;
+                msgEl.className = "text-center text-sm font-bold text-blue-600 mt-2 min-h-[40px] flex items-center justify-center";
+            } else {
+            // ถ้าน้อยกว่า แสดงว่าของเหลวความหนืดต่ำไป หรือท่อสั้นไป (ชนพื้นก่อน) กราฟจะเป็นเกือบเส้นตรง ให้แจ้งเตือนนักเรียน!
+                msgEl.innerText = isTh ? `(ท่อสั้นเกินไป วัตถุตกถึงพื้นก่อนจะถึงความเร็วปลายทฤษฎีที่ ${vt.toExponential(2)} m/s)` 
+                                       : `(Tube too short: hits bottom before reaching theoretical vt of ${vt.toExponential(2)} m/s)`;
+                msgEl.className = "text-center text-sm font-bold text-orange-500 mt-2 min-h-[40px] flex items-center justify-center";
+            }
+
+            drawFrame();
+        }
+
+        function drawArrow(fromX, fromY, length, color, isUp) {
+            if (Math.abs(length) < 2) return; 
+            const toY = isUp ? fromY - length : fromY + length;
+            const headlen = Math.min(8, Math.abs(length) * 0.5); 
+            const dir = isUp ? -1 : 1;
+            
+            ctx.beginPath();
+            ctx.moveTo(fromX, fromY);
+            ctx.lineTo(fromX, toY);
+            ctx.lineTo(fromX - headlen*0.6, toY - headlen * dir);
+            ctx.moveTo(fromX, toY);
+            ctx.lineTo(fromX + headlen*0.6, toY - headlen * dir);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 3;
+            ctx.stroke();
+        }
+
+        function drawFrame() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            const isTh = document.body.classList.contains('lang-th');
+            const topOffset = 20;
+            
+            ctx.fillStyle = params.eta > 1 ? (params.eta > 5 ? 'rgba(251, 191, 36, 0.3)' : 'rgba(147, 197, 253, 0.5)') : 'rgba(191, 219, 254, 0.4)';
+            ctx.fillRect(40, 0, canvas.width - 80, canvas.height);
+
+            ctx.fillStyle = '#64748b';
+            ctx.font = 'bold 12px Inter';
+            ctx.textAlign = 'right';
+            
+            let step = tankHeight_m > 10 ? 2 : 1;
+            
+            for(let i=0; i<=Math.ceil(tankHeight_m); i+=step) {
+                const markY = topOffset + (i * pixelsPerMeter);
+                if (markY > canvas.height - topOffset + 0.1) continue; 
+                
+                ctx.beginPath();
+                ctx.moveTo(30, markY);
+                ctx.lineTo(40, markY);
+                ctx.strokeStyle = '#94a3b8';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                ctx.fillText(i + 'm', 25, markY + 4);
+            }
+            
+            // ปรับขนาดภาพลูกบอลให้ดูเล็กลงและสมส่วนกับท่อมากขึ้น
+            const visualR = Math.max(5, params.r_m * 1000 * 0.8); 
+            const cx = canvas.width / 2;
+            ctx.textAlign = 'left';
+            
+            markers.forEach(m => {
+                const my = topOffset + (m.y_m * pixelsPerMeter);
+                
+                ctx.beginPath();
+                ctx.arc(cx, my, visualR, 0, Math.PI*2);
+                ctx.fillStyle = 'rgba(100, 116, 139, 0.2)';
+                ctx.fill();
+                ctx.strokeStyle = 'rgba(100, 116, 139, 0.4)';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+                
+                ctx.fillStyle = '#64748b'; 
+                ctx.font = '10px Inter'; 
+                ctx.fillText(`t = ${m.time.toFixed(1)}s`, cx + visualR + 10, my + 3);
+                
+                ctx.beginPath();
+                ctx.moveTo(cx + visualR + 2, my);
+                ctx.lineTo(cx + visualR + 8, my);
+                ctx.strokeStyle = '#cbd5e1'; 
+                ctx.stroke();
+            });
+
+            const cy = topOffset + (state.y_m * pixelsPerMeter);
+            ctx.beginPath();
+            ctx.arc(cx, cy, visualR, 0, Math.PI*2);
+            ctx.fillStyle = params.rho_s === 7800 ? '#475569' : (params.rho_s === 2500 ? '#93c5fd' : '#b45309');
+            ctx.fill();
+            ctx.strokeStyle = '#1e293b';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            const vol = (4/3) * Math.PI * Math.pow(params.r_m, 3);
+            const W = vol * params.rho_s * g;
+            const Fb = vol * params.rho_f * g;
+            const Fd = 6 * Math.PI * params.eta * params.r_m * Math.abs(state.v);
+
+            // ขยับลูกศรเวกเตอร์ตามขนาดของรัศมีวัตถุ (visualR)
+            const arrowOffset = visualR + 4;
+
+            drawArrow(cx, cy, W * forceScale, '#dc2626', false);
+            drawArrow(cx - arrowOffset, cy, Fb * forceScale, '#3b82f6', true);
+            if (Fd > 0) {
+                const isDragUp = state.v >= 0;
+                drawArrow(cx + arrowOffset, cy, Fd * forceScale, '#22c55e', isDragUp);
+            }
+            
+            // แสดงเวลาและ Speed ของแอนิเมชันให้ผู้ใช้ทราบ
+            ctx.textAlign = 'right';
+            ctx.fillStyle = '#334155';
+            ctx.font = 'bold 14px Inter';
+            ctx.fillText(`${isTh ? 'เวลา' : 'Time'}: ${state.time.toFixed(2)}s`, canvas.width - 15, 25);
+            
+            if (Math.abs(simSpeedMultiplier - 1.0) > 0.05) {
+                ctx.font = '12px Inter';
+                ctx.fillStyle = '#64748b';
+                ctx.fillText(`(Speed: ${simSpeedMultiplier.toFixed(1)}x)`, canvas.width - 15, 42);
+            }
+        }
+
+        let lastTime = 0;
+        let chartData = [];
+        let lastChartTime = 0;
+        let physicsAccumulator = 0;
+
+        function startSim() {
+            if(simRunning) return;
+            
+            if (state.y_m >= tankHeight_m - (params.r_m*2) || state.y_m <= 0) {
+                previewPosition(); 
+            }
+            
+            simRunning = true;
+            lastTime = performance.now();
+            chartData = [{ x: 0, y: state.v }]; 
+            lastChartTime = 0;
+            physicsAccumulator = 0;
+            updateSim(); 
+        }
+
+        function resetSim() {
+            simRunning = false;
+            if (animationId) cancelAnimationFrame(animationId);
+            previewPosition(); // เรียกให้วาดฉากเริ่มต้นใหม่
+        }
+
+        function updateSim() {
+            if (!simRunning) return;
+
+            const now = performance.now();
+            // นำตัวคูณเวลาที่ประเมินได้จาก Preview มาใช้ปรับ Frame ให้เคลื่อนที่สมจริงทางความรู้สึก
+            let frameTime = ((now - lastTime) / 1000) * simSpeedMultiplier;
+            lastTime = now;
+
+            if (frameTime > 0.5) frameTime = 0.5; 
+            physicsAccumulator += frameTime;
+
+            const FIXED_DT = 0.01; 
+            let needsChartUpdate = false;
+
+            while (physicsAccumulator >= FIXED_DT) {
+                const vol = (4/3) * Math.PI * Math.pow(params.r_m, 3);
+                const m = vol * params.rho_s;
+                const W = m * g;
+                const Fb = vol * params.rho_f * g;
+                
+                const Fd_mag = 6 * Math.PI * params.eta * params.r_m * Math.abs(state.v);
+                const dir = state.v >= 0 ? 1 : -1; 
+                
+                const Fnet = W - Fb - (Fd_mag * dir);
+                const a = Fnet / m;
+                
+                state.v += a * FIXED_DT;
+                state.y_m += state.v * FIXED_DT;
+                state.time += FIXED_DT;
+
+                // ทิ้ง Marker ไว้ตามระยะเวลาที่กำหนดไว้
+                if (state.time >= nextMarkerTime) {
+                    markers.push({ y_m: state.y_m, time: nextMarkerTime });
+                    nextMarkerTime += markerInterval;
+                }
+
+                // พลอตกราฟตามสัดส่วนเวลา เพื่อลดอาการแล็กจากการส่งข้อมูลมากเกินไป
+                const chartDrawInterval = Math.max(0.02, simMaxTime / 200); 
+                if (state.time - lastChartTime >= chartDrawInterval) {
+                    chartData.push({ x: state.time, y: state.v });
+                    lastChartTime = state.time;
+                    needsChartUpdate = true;
+                }
+
+                physicsAccumulator -= FIXED_DT;
+
+                if (state.y_m >= tankHeight_m && state.v > 0) {
+                    state.y_m = tankHeight_m;
+                    state.v = 0;
+                    simRunning = false;
+                    break; 
+                } else if (state.y_m <= 0 && state.v < 0) {
+                    state.y_m = 0;
+                    state.v = 0;
+                    simRunning = false;
+                    break;
+                }
+            }
+
+            // อัปเดตกราฟแบบไม่ขยับขอบเขตสเกล เพื่อความราบเรียบในการมอง
+            if (needsChartUpdate && simRunning) {
+                myChart.data.datasets[0].data = chartData;
+                myChart.update();
+            }
+
+            drawFrame();
+            
+            if (simRunning) {
+                animationId = requestAnimationFrame(updateSim);
+            }
+        }
+    </script>
+</body>
+</html>
